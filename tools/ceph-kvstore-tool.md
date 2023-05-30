@@ -18,3 +18,8 @@ ceph-kvstore-tool rocksdb /tmp/store.db get mon_config_key  mgr/dashboard/access
 
 cat file|jq
 ```
+
+# mon_config_key顾名思义，就是保存对应的config-key，有对应的ceph命令行
+ceph --mon-host 10.172.88.88:6789 config-key ls
+
+ceph --mon-host 10.172.88.88:6789 config-key get mgr/dashboard/accessdb_v2|jq
