@@ -10,7 +10,11 @@ ceph-kvstore-tool是一个命令行工具，用于管理Ceph集群中的KV（key
 ```
 cp -r /var/lib/ceph/mon/ceph-b/store.db /tmp/
 
+# 列出所有(prefix key)
 ceph-kvstore-tool rocksdb /tmp/store.db list
 
+# 查看dashboard账户密码信息
 ceph-kvstore-tool rocksdb /tmp/store.db get mon_config_key  mgr/dashboard/accessdb_v2 out file
+
+cat file|jq
 ```
