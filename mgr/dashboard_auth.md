@@ -210,3 +210,150 @@ void MonClient::start_mon_command(const std::vector<string> &cmd,
   mon_commands[r->tid] = r;
   _send_command(r);
 }
+
+# mon侧的处理
+// src/mon/Monitor.cc
+void Monitor::handle_command(MonOpRequestRef op) {
+...
+  if (module == "config-key") {
+    config_key_service->dispatch(op);
+    return;
+  }
+...
+}
+
+// src/mon/ConfigKeyService.cc
+bool ConfigKeyService::service_dispatch(MonOpRequestRef op) {
+  Message *m = op->get_req();
+  ceph_assert(m != NULL);
+  dout(10) << __func__ << " " << *m << dendl;
+
+  if (!in_quorum()) {
+    dout(1) << __func__ << " not in quorum -- waiting" << dendl;
+    paxos->wait_for_readable(op, new Monitor::C_RetryMessage(mon, op));
+    return false;
+  }
+
+  ceph_assert(m->get_type() == MSG_MON_COMMAND);
+
+  MMonCommand *cmd = static_cast<MMonCommand *>(m);
+
+  ceph_assert(!cmd->cmd.empty());
+
+  int ret = 0;
+  stringstream ss;
+  bufferlist rdata;
+
+  string prefix;
+  cmdmap_t cmdmap;
+
+  if (!TOPNSPC::common::cmdmap_from_json(cmd->cmd, &cmdmap, ss)) {
+    return false;
+  }
+
+  cmd_getval(cmdmap, "prefix", prefix);
+  string key;
+  cmd_getval(cmdmap, "key", key);
+
+  if (prefix == "config-key get") {
+    ret = store_get(key, rdata);
+    if (ret < 0) {
+      ceph_assert(!rdata.length());
+      ss << "error obtaining '" << key << "': " << cpp_strerror(ret);
+      goto out;
+    }
+    ss << "obtained '" << key << "'";
+
+  } else if (prefix == "config-key put" || prefix == "config-key set") {
+    if (!mon->is_leader()) {
+      mon->forward_request_leader(op);
+      // we forward the message; so return now.
+      return true;
+    }
+
+    bufferlist data;
+    string val;
+    if (cmd_getval(cmdmap, "val", val)) {
+      // they specified a value in the command instead of a file
+      data.append(val);
+    } else if (cmd->get_data_len() > 0) {
+      // they specified '-i <file>'
+      data = cmd->get_data();
+    }
+    if (data.length() > (size_t)g_conf()->mon_config_key_max_entry_size) {
+      ret = -EFBIG; // File too large
+      ss << "error: entry size limited to "
+         << g_conf()->mon_config_key_max_entry_size << " bytes. "
+         << "Use 'mon config key max entry size' to manually adjust";
+      goto out;
+    }
+
+    ss << "set " << key;
+
+    // we'll reply to the message once the proposal has been handled
+    store_put(key, data, new Monitor::C_Command(mon, op, 0, ss.str(), 0));
+    // return for now; we'll put the message once it's done.
+    return true;
+
+  } else if (prefix == "config-key del" || prefix == "config-key rm") {
+    if (!mon->is_leader()) {
+      mon->forward_request_leader(op);
+      return true;
+    }
+
+    if (!store_exists(key)) {
+      ret = 0;
+      ss << "no such key '" << key << "'";
+      goto out;
+    }
+    store_delete(key, new Monitor::C_Command(mon, op, 0, "key deleted", 0));
+    // return for now; we'll put the message once it's done
+    return true;
+
+  } else if (prefix == "config-key exists") {
+    bool exists = store_exists(key);
+    ss << "key '" << key << "'";
+    if (exists) {
+      ss << " exists";
+      ret = 0;
+    } else {
+      ss << " doesn't exist";
+      ret = -ENOENT;
+    }
+
+  } else if (prefix == "config-key list" || prefix == "config-key ls") {
+    stringstream tmp_ss;
+    store_list(tmp_ss);
+    rdata.append(tmp_ss);
+    ret = 0;
+
+  } else if (prefix == "config-key dump") {
+    string prefix;
+    cmd_getval(cmdmap, "key", prefix);
+    stringstream tmp_ss;
+    store_dump(tmp_ss, prefix);
+    rdata.append(tmp_ss);
+    ret = 0;
+  }
+
+out:
+  if (!cmd->get_source().is_mon()) {
+    string rs = ss.str();
+    mon->reply_command(op, ret, rs, rdata, 0);
+  }
+
+  return (ret == 0);
+}
+
+根据get set list等命令字相应调用store_get，store_put，store_list等操作
+
+int ConfigKeyService::store_get(const string &key, bufferlist &bl) {
+  return mon->store->get(CONFIG_PREFIX, key, bl);
+}
+
+src/mon/MonitorDBStore.h
+  int get(const string &prefix, const string &key, bufferlist &bl) {
+    ceph_assert(bl.length() == 0);
+    return db->get(prefix, key, &bl);
+  }
+
