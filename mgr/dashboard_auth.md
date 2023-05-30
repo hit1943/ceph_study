@@ -356,4 +356,9 @@ src/mon/MonitorDBStore.h
     ceph_assert(bl.length() == 0);
     return db->get(prefix, key, &bl);
   }
+  
+# ceph中config-key操作对应的命令行
+1. 以上将账户信息保存到kvstore中的流程本质就是向mon主发送一个命令，类似于下列config-key的命令行
+ceph --mon-host 10.172.88.88:6789 config-key ls
+ceph --mon-host 10.172.88.88:6789 config-key get mgr/dashboard/accessdb_v2|jq
 
