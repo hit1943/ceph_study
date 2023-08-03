@@ -45,7 +45,23 @@ lambda表达式捕获request对象的值，然后检查以下任何一种情况�
 request->reply为真，表示已接收到回复。
 request->resend_mds >= 0为真，表示需要将请求转发到其他MDS。
 request->kick为真，表示代码需要“kick”caller_cond条件变量以唤醒正在等待它的线程。
-如果任何这些条件为真，lambda表达式返回true，这将导致wait()函数退出，调用线程继续执行。
+
+以上类似于以下代码：
+
+bool lambda(request)
+{
+    return (request->reply ||           // reply
+        request->resend_mds >= 0 || // forward
+        request->kick);
+}
+
+wait(l, lambda)
+{
+    while (!lambda()) {
+        wait(lock);
+    }
+}
+即当caller_cond收到notify唤醒，判断lambda函数返回值是为真，若为真将导致wait()函数退出，调用线程继续执行。
 
 
 
